@@ -22,7 +22,6 @@ pub struct NoteItem {
     updated_at: u64,
 }
 
-#[tauri::command]
 async fn get_all_notes() -> Result<Vec<NoteItem>, String> {
     tracing_subscriber::fmt::init();
 
@@ -169,13 +168,82 @@ async fn get_all_notes() -> Result<Vec<NoteItem>, String> {
 //     Ok(updated_note)
 // }
 
+// fn main() {
+//     tauri::Builder::default()
+//         .invoke_handler(tauri::generate_handler![
+//             get_all_notes,
+//             // new_note,git
+//             // update_note,
+//         ])
+//         .run(tauri::generate_context!())
+//         .expect("error while running tauri application");
+// }
+
+use tauri::Manager;
+use tokio::sync::mpsc;
+use tokio::sync::Mutex;
+use tracing::info;
+use tracing_subscriber;
+
+struct AsyncProcInputTx {
+    inner: Mutex<mpsc::Sender<String>>,
+}
+
 fn main() {
+    tracing_subscriber::fmt::init();
+
+    let (async_proc_input_tx, async_proc_input_rx) = mpsc::channel(1);
+    let (async_proc_output_tx, mut async_proc_output_rx) = mpsc::channel(1);
+
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![
-            get_all_notes,
-            // new_note,git
-            // update_note,
-        ])
+        .manage(AsyncProcInputTx {
+            inner: Mutex::new(async_proc_input_tx),
+        })
+        .invoke_handler(tauri::generate_handler![js2rs])
+        .setup(|app| {
+            tauri::async_runtime::spawn(async move {
+                async_process_model(async_proc_input_rx, async_proc_output_tx).await
+            });
+
+            let app_handle = app.handle();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    if let Some(output) = async_proc_output_rx.recv().await {
+                        rs2js(output, &app_handle);
+                    }
+                }
+            });
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn rs2js<R: tauri::Runtime>(note: NoteItem, manager: &impl Manager<R>) {
+    info!(?message, "rs2js");
+    manager.emit_all("get_all_notes", note).unwrap();
+}
+
+#[tauri::command]
+async fn get_all_notes(state: tauri::State<'_, AsyncProcInputTx>) -> Result<(), String> {
+    info!(?message, "get_all_notes");
+    let async_proc_input_tx = state.inner.lock().await;
+    async_proc_input_tx
+        // Can change this to any input type
+        .send(String::new())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn async_process_model(
+    mut input_rx: mpsc::Receiver<String>,
+    output_tx: mpsc::Sender<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    while let Some(input) = input_rx.recv().await {
+        let notes = get_all_notes()?;
+        output_tx.send(output).await?;
+    }
+
+    Ok(())
 }
