@@ -55,7 +55,7 @@ DB_PATH=../turso-notes.db
 Open the created Turso database on the Turso CLI shell to issue SQLite statements:
 
 ```sh
-turso db shell turso-notes.
+turso db shell turso-notes
 ```
 
 On the Turso CLI shell, issue the following statement to create a "notes" table.
